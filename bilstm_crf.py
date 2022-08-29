@@ -2,7 +2,6 @@ import torch
 import torch.autograd as autograd
 import torch.nn as nn
 import torch.optim as optim
-from tqdm.notebook import tqdm, trange
 
 
 torch.manual_seed(1)    # 人工设定随机种子以保证相同的初始化参数，实现模型的可复现性。
@@ -28,6 +27,19 @@ def log_sum_exp(vec):                # 函数目的相当于log∑exi 首先取�
     return max_score + torch.log(torch.sum(torch.exp(vec - max_score_broadcast)))
 
 
+# def compute_loss(self, pre, target):
+#     loss_func = torch.nn.SmoothL1Loss()
+#     loss = [loss_func(x, y) for x, y in zip(pre, target)]
+#     plt.rcParams['figure.figsize'] = (5.0, 4.0)  # 设置图像显示大小
+#     plt.rcParams['image.interpolation'] = 'nearest'  # 设置差值方式
+#     plt.rcParams['image.cmap'] = 'gray'  # 设置灰度空间
+#     plt.plot(np.squeeze(loss))
+#     plt.ylabel('loss')
+#     plt.xlabel('iterations (per tens)')
+#     plt.title("Learning rate = 0.01")
+#     plt.show()
+
+
 class BiLSTM_CRF(nn.Module):
 
     def __init__(self, vocab_size, tag_to_ix, embedding_dim, hidden_dim):
@@ -47,8 +59,8 @@ class BiLSTM_CRF(nn.Module):
         # 的输出维度依然是hidden_size,而不用乘以2
 
         # Maps the output of the LSTM into tag space.
-        self.hidden2tag = nn.Linear(hidden_dim,
-                                    self.tagset_size)  # （输入x的维度，输出y的维度），将LSTM的输出线性映射到标签空间
+        # （输入x的维度，输出y的维度），将LSTM的输出线性映射到标签空间
+        self.hidden2tag = nn.Linear(hidden_dim, self.tagset_size)
 
         # Matrix of transition parameters.  Entry i,j is the score of
         # transitioning *to* i *from* j.
@@ -63,9 +75,10 @@ class BiLSTM_CRF(nn.Module):
         self.hidden = self.init_hidden()
 
     def init_hidden(self):  # 初始化隐层（两层，3维）
+        # (num_layer * num_direction, batch_size)
+        # (隐层层数2 * 方向数1， 批大小1， 每层节点数)
         return (torch.randn(2, 1, self.hidden_dim//2),
-            # (num_layer * num_direction, batch_size)
-        torch.randn(2, 1, self.hidden_dim//2))  # (隐层层数2 * 方向数1， 批大小1， 每层节点数)
+                torch.randn(2, 1, self.hidden_dim//2))
 
     def _forward_alg(self, feats):  # 得到所有路径的分数/概率
         # Do the forward algorithm to compute the partition function
@@ -101,12 +114,12 @@ class BiLSTM_CRF(nn.Module):
 
     def _get_lstm_features(self, sentence):  # 通过BiLSTM层，输出得到发射分数
         self.hidden = self.init_hidden()
-        embeds = self.word_embeds(sentence).view(len(sentence), 1,
-                                                 -1)  # 对输入语句 词嵌入化
-        lstm_out, self.hidden = self.lstm(embeds,
-                                          self.hidden)  # 词嵌入通过lstm网络输出,lstm传入参数之后会自动调用其forward方法
-        lstm_out = lstm_out.view(len(sentence),
-                                 self.hidden_dim)  # 将输出转为2维（原本是3维，但是batch_size=1，可以去掉这一维）
+        # 对输入语句 词嵌入化
+        embeds = self.word_embeds(sentence).view(len(sentence), 1, -1)
+        # 词嵌入通过lstm网络输出,lstm传入参数之后会自动调用其forward方法
+        lstm_out, self.hidden = self.lstm(embeds, self.hidden)
+        # 将输出转为2维（原本是3维，但是batch_size=1，可以去掉这一维）
+        lstm_out = lstm_out.view(len(sentence), self.hidden_dim)
         lstm_feats = self.hidden2tag(lstm_out)  # 将输出映射到标签空间，得到单词-分数表
         return lstm_feats
 
@@ -127,15 +140,18 @@ class BiLSTM_CRF(nn.Module):
         backpointers = []
 
         # Initialize the viterbi variables in log space
-        init_vvars = torch.full((1, self.tagset_size),
-                                -10000.)  # 初始化forward_var,并且 开始标注 的分数为0,确保一定是从START_TAG开始的,
+        # 初始化forward_var,并且 开始标注 的分数为0,确保一定是从START_TAG开始的,
+        init_vvars = torch.full((1, self.tagset_size), -10000.)
         init_vvars[0][self.tag_to_ix[START_TAG]] = 0
 
         # forward_var at step i holds the viterbi variables for step i-1
-        forward_var = init_vvars  # forward_var记录每个标签的前向状态得分，即w{i-1}被打作每个标签的对应得分值
-        for feat in feats:  # feats是LSTM的输出，每一个feat都是一个词w{i}，feat[tag]就是这个词tag标注的分数
-            bptrs_t = []  # holds the backpointers for this step                     # 记录当前词w{i}对应每个标签的最优转移结点
-            viterbivars_t = []  # holds the viterbi variables for this step          # 记录当前词各个标签w{i, j}对应的最高得分
+        # forward_var记录每个标签的前向状态得分，即w{i-1}被打作每个标签的对应得分值
+        forward_var = init_vvars
+
+        # feats是LSTM的输出，每一个feat都是一个词w{i}，feat[tag]就是这个词tag标注的分数
+        for feat in feats:
+            bptrs_t = []  # holds the backpointers for this step记录当前词w{i}对应每个标签的最优转移结点
+            viterbivars_t = []  # holds the viterbi variables for this step 记录当前词各个标签w{i, j}对应的最高得分
             # 动态规划：w{i，j}=max{forwar_var + transitions[j]}，词存于bptrs_t中，分数存于viterbivars_t中
 
             for next_tag in range(self.tagset_size):  # 对当前词w{i}的每个标签 运算
@@ -169,13 +185,11 @@ class BiLSTM_CRF(nn.Module):
         best_path.reverse()
         return path_score, best_path
 
-    def neg_log_likelihood(self, sentence,
-                           tags):  # CRF的损失函数：-gold分数-logsumexp(所有序列)
+    def neg_log_likelihood(self, sentence, tags):  # CRF的损失函数：-gold分数-logsumexp(所有序列)
         feats = self._get_lstm_features(
             sentence)  # 通过BiLSTM层，获得每个 {词-标签}对 的发射分数
         forward_score = self._forward_alg(feats)  # 根据发射分数计算所有路径的分数
-        gold_score = self._score_sentence(feats,
-                                          tags)  # 传入标注序列真实值，计算语句的真实分数gold_score
+        gold_score = self._score_sentence(feats, tags)  # 传入标注序列真实值，计算语句的真实分数gold_score
         return forward_score-gold_score  # 返回误差值
 
     def forward(self, sentence):  # 重载前向传播函数，对象传入参数后就会自动调用该函数

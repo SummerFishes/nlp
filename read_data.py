@@ -36,4 +36,3 @@ def read(file):
     print(len(data_set['training']))
     print(len(data_set['test']))
     return data_set, word_to_ix
-
