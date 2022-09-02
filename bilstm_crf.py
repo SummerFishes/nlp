@@ -7,6 +7,7 @@ import torch.optim as optim
 torch.manual_seed(1)    # 人工设定随机种子以保证相同的初始化参数，实现模型的可复现性。
 START_TAG = "<START>"
 STOP_TAG = "<STOP>"
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
 def argmax(vec):  # 给定输入二维序列，取每行（第一维度）的最大值，返回对应索引。
@@ -15,13 +16,15 @@ def argmax(vec):  # 给定输入二维序列，取每行（第一维度）的最
     return idx.item()
 
 
-def prepare_sequence(seq, to_ix):    # 利用to_ix这个word2id字典，将序列seq中的词转化为数字表示，包装为torch.long后返回
-    idxs = [to_ix[w] for w in seq]
+def prepare_sequence(seq, to_ix):   # 利用to_ix映射，将词序列转化为下标序列，并转成张量
+    idxs = [to_ix.get(w, 0) for w in seq]
+    # idxs = [to_ix[w] for w in seq]
     return torch.tensor(idxs, dtype=torch.long)
 
 
 # Compute log sum exp in a numerically stable way for the forward algorithm
-def log_sum_exp(vec):                # 函数目的相当于log∑exi 首先取序列中最大值，输入序列是一个二维序列(shape[1,tags_size])。下面的计算先将每个值减去最大值，再取log_sum_exp，最后加上最大值。
+def log_sum_exp(vec):   # 函数目的相当于log∑exi(首先取序列中最大值，输入序列是一个二维序列(
+    # shape[1,tags_size])。下面的计算先将每个值减去最大值，再取log_sum_exp，最后加上最大值)
     max_score = vec[0, argmax(vec)]
     max_score_broadcast = max_score.view(1, -1).expand(1, vec.size()[1])
     return max_score + torch.log(torch.sum(torch.exp(vec - max_score_broadcast)))
@@ -96,8 +99,7 @@ class BiLSTM_CRF(nn.Module):
             for next_tag in range(self.tagset_size):
                 # broadcast the emission score: it is the same regardless of
                 # the previous tag
-                emit_score = feat[next_tag].view(1, -1).expand(1,
-                                                               self.tagset_size)
+                emit_score = feat[next_tag].view(1, -1).expand(1,self.tagset_size)
                 # the ith entry of trans_score is the score of transitioning to
                 # next_tag from i
                 trans_score = self.transitions[next_tag].view(1, -1)
@@ -148,7 +150,7 @@ class BiLSTM_CRF(nn.Module):
         # forward_var记录每个标签的前向状态得分，即w{i-1}被打作每个标签的对应得分值
         forward_var = init_vvars
 
-        # feats是LSTM的输出，每一个feat都是一个词w{i}，feat[tag]就是这个词tag标注的分数
+        # feats是LSTM的输出，每一个feat都是一个词w{i}的所有标注分数，feat[tag]就是这个词tag标注的分数
         for feat in feats:
             bptrs_t = []  # holds the backpointers for this step记录当前词w{i}对应每个标签的最优转移结点
             viterbivars_t = []  # holds the viterbi variables for this step 记录当前词各个标签w{i, j}对应的最高得分

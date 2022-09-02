@@ -5,7 +5,7 @@ from flask import Flask
 from flask import request
 from flask_cors import CORS
 
-from bilstm_crf import prepare_sequence
+from bilstm_crf import *
 from read_data import read
 
 app = Flask(__name__)  # 如果是单独应用可以使用__name__，如果是module则用模块名
@@ -38,13 +38,14 @@ def nlp():
     with torch.no_grad():
         tokens = sentence.split()
         model_in = prepare_sequence(tokens, word_to_ix)
-        model_out = pre_model(model_in)
-        nlp_result = get_entity(model_out[1], sentence)
-    # nlp_result = {
-    #     "NAME": "",
-    #     "TICKER": "",
-    #     "NOTIONAL": ""
-    # }
+        try:
+            model_out = pre_model(model_in)
+            nlp_result = get_entity(model_out[1], sentence)
+        except:
+            nlp_result = {'result': 'No entities found in sentence'}
+    if len(nlp_result) == 1:
+        nlp_result = {'result': 'No entities found in sentence'}
+    print(nlp_result)
     return nlp_result
 
 
@@ -52,6 +53,7 @@ def get_entity(ix_seq, sentence):
     ix_to_tag = {0: "NAME", 1: "TICKER", 2: "NOTIONAL", }
     # tag_seq = [ix_to_tag[ix] for ix in ix_seq]
     entities = defaultdict(str)
+    tokens = sentence.split()
     i = 0
     while i < len(ix_seq):
         ix = ix_seq[i]
@@ -59,11 +61,13 @@ def get_entity(ix_seq, sentence):
             j = i+1
             while j < len(ix_seq) and ix_seq[j] == ix+3:
                 j += 1
-            entities[ix_to_tag[ix]] = sentence[i: j]
+            entities[ix_to_tag[ix]] = ' '.join(tokens[i: j])
             i = j-1
         i += 1
+    entities['result'] = 'successful!'
     return entities
 
 
 if __name__ == '__main__':
-    app.run()
+    # app.run()
+    app.run(host='0.0.0.0')
